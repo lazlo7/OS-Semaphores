@@ -1,11 +1,11 @@
 CC=gcc
 CFLAGS=-std=c11 -Wall -Wextra -pedantic
+POSIX_SEM_FLAG=-pthread
+POSIX_SHM_FLAG=-lrt
 
-main: main.c
-	$(CC) main.c -o main
-
-all: main
-.DEFAULT_GOAL := main
+# Named Posix semaphores + Posix shared memory.
+mark4: 4/prog.c
+	$(CC) $(CFLAGS) $(POSIX_SEM_FLAG) $(POSIX_SHM_FLAG) 4/prog.c -o mark4 
 
 clean:
-	rm -f main
+	rm -f mark4
