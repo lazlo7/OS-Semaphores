@@ -370,6 +370,8 @@ void onChildTerminated(int signum)
         kill(stealer_pid, SIGKILL);
         kill(loader_pid, SIGKILL);
     }
+
+    exit(1);
 }
 
 int main(int argc, char** argv)
@@ -389,6 +391,12 @@ int main(int argc, char** argv)
         for (int i = 0; i < item_count; ++i) {
             sscanf(argv[i + 1], "%d", &item_prices[i]);
         }
+    }
+
+    // Register SIGCHLD handler.
+    if (signal(SIGCHLD, onChildTerminated) == SIG_ERR) {
+        printf("[Error] Failed to register SIGCHLD handler: %s\n", strerror(errno));
+        return 1;
     }
 
     stealer_pid = fork();
