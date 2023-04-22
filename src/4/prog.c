@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <semaphore.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,7 +10,6 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
-#include <signal.h>
 
 #define MAX_ITEM_COUNT 1000
 #define MIN_ITEM_RANDOM_COUNT 1
@@ -77,14 +77,14 @@ int emulateStealer(
     }
 
     // Open semaphores.
-    sem_t* const sem_block_stealer = sem_open(sem_block_stealer_name, O_CREAT, 0666);
+    sem_t* const sem_block_stealer = sem_open(sem_block_stealer_name, O_CREAT, 0666, 0);
     if (sem_block_stealer == SEM_FAILED) {
         printf("[Stealer Error] Failed to open semaphore '%s': %s\n", sem_block_stealer_name, strerror(errno));
         exit_code = 1;
         goto cleanup_shm_stolen_item_fd;
     }
 
-    sem_t* const sem_block_loader = sem_open(sem_block_loader_name, O_CREAT, 0666);
+    sem_t* const sem_block_loader = sem_open(sem_block_loader_name, O_CREAT, 0666, 0);
     if (sem_block_loader == SEM_FAILED) {
         printf("[Stealer Error] Failed to open semaphore '%s': %s\n", sem_block_loader_name, strerror(errno));
         exit_code = 1;
@@ -141,14 +141,14 @@ int emulateLoader(
     char const* sem_block_observer_name)
 {
     // Open shared memory.
-    int const shm_stolen_item_fd = shm_open(shm_stolen_item_name, O_CREAT | O_RDWR, 0666);
+    int const shm_stolen_item_fd = shm_open(shm_stolen_item_name, O_CREAT | O_RDONLY, 0666);
     if (shm_stolen_item_fd == -1 && errno != EEXIST) {
         printf("[Loader Error] Failed to open shared memory '%s': %s\n", shm_stolen_item_name, strerror(errno));
         return 1;
     }
 
     int exit_code = 0;
-    int* const shm_stolen_item_addr = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED, shm_stolen_item_fd, 0);
+    int* const shm_stolen_item_addr = mmap(NULL, sizeof(int), PROT_READ, MAP_SHARED, shm_stolen_item_fd, 0);
     if (shm_stolen_item_addr == MAP_FAILED) {
         printf("[Loader Error] Failed to map shared memory '%s': %s\n", shm_stolen_item_name, strerror(errno));
         exit_code = 1;
@@ -171,21 +171,21 @@ int emulateLoader(
     }
 
     // Open semaphores.
-    sem_t* const sem_block_stealer = sem_open(sem_block_stealer_name, O_CREAT, 0666);
+    sem_t* const sem_block_stealer = sem_open(sem_block_stealer_name, O_CREAT, 0666, 0);
     if (sem_block_stealer == SEM_FAILED) {
         printf("[Loader Error] Failed to open semaphore '%s': %s\n", sem_block_stealer_name, strerror(errno));
         exit_code = 1;
         goto cleanup_shm_loaded_items_fd;
     }
 
-    sem_t* const sem_block_loader = sem_open(sem_block_loader_name, O_CREAT, 0666);
+    sem_t* const sem_block_loader = sem_open(sem_block_loader_name, O_CREAT, 0666, 0);
     if (sem_block_loader == SEM_FAILED) {
         printf("[Loader Error] Failed to open semaphore '%s': %s\n", sem_block_loader_name, strerror(errno));
         exit_code = 1;
         goto cleanup_sem_block_stealer;
     }
 
-    sem_t* const sem_block_observer = sem_open(sem_block_observer_name, O_CREAT, 0666);
+    sem_t* const sem_block_observer = sem_open(sem_block_observer_name, O_CREAT, 0666, 0);
     if (sem_block_observer == SEM_FAILED) {
         printf("[Loader Error] Failed to open semaphore '%s': %s\n", sem_block_observer_name, strerror(errno));
         exit_code = 1;
@@ -216,6 +216,8 @@ int emulateLoader(
             exit_code = 1;
             goto cleanup_sem_block_observer;
         }
+
+        printf("[Loader] Received new item info from stealer!");
 
         // If the item price is negative, it means that Stealer has no more items to hand over.
         if (stolen_item_price < 0) {
@@ -283,7 +285,7 @@ int emulateObserver(char const* sem_block_observer_name)
     }
 
     // Open semaphore.
-    sem_t* const sem_block_observer = sem_open(sem_block_observer_name, O_CREAT, 0666);
+    sem_t* const sem_block_observer = sem_open(sem_block_observer_name, O_CREAT, 0666, 0);
     if (sem_block_observer == SEM_FAILED) {
         printf("[Observer Error] Failed to open semaphore '%s': %s\n", sem_block_observer_name, strerror(errno));
         exit_code = 1;
@@ -344,6 +346,7 @@ void onChildTerminated(int signum)
 {
     (void)signum;
 
+
     int status;
     pid_t const exited_pid = wait(&status);
     if (exited_pid == -1) {
@@ -393,6 +396,15 @@ int main(int argc, char** argv)
         }
     }
 
+    printf("Military intel tells us that there are %d items to steal with prices: \n", item_count);
+    for (int i = 0; i < item_count; ++i) {
+        printf("%d", item_prices[i]);
+        if (i + 1 != item_count) {
+            printf(", ");
+        }
+    }
+    printf("\n");
+
     // Register SIGCHLD handler.
     if (signal(SIGCHLD, onChildTerminated) == SIG_ERR) {
         printf("[Error] Failed to register SIGCHLD handler: %s\n", strerror(errno));
@@ -430,6 +442,10 @@ int main(int argc, char** argv)
     if (observer_pid == 0) {
         // Observer.
         return emulateObserver(sem_block_observer_name);
+    }
+
+    // Wait for children to finish.
+    while (finished_child_process_count < 3) {
     }
 
     return 0;
