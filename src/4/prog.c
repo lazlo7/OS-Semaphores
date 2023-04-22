@@ -39,12 +39,13 @@ int getRandomNumber(int from, int to)
 }
 
 // item_prices should be at least of size MAX_ITEM_COUNT.
-void generateItemPrices(int* item_prices)
+int generateItemPrices(int* item_prices)
 {
     int const item_count = getRandomNumber(MIN_ITEM_RANDOM_COUNT, MAX_ITEM_RANDOM_COUNT);
     for (int i = 0; i < item_count; i++) {
         item_prices[i] = getRandomNumber(MIN_ITEM_RANDOM_PRICE, MAX_ITEM_RANDOM_PRICE);
     }
+    return item_count;
 }
 
 void emulateActivity(void)
@@ -374,7 +375,7 @@ void onChildTerminated(int signum)
 int main(int argc, char** argv)
 {
     // Parse item prices.
-    int const item_count = argc - 1;
+    int item_count = argc - 1;
     if (item_count > MAX_ITEM_COUNT) {
         printf("[Error] Too many items: %d (max %d)\n", item_count, MAX_ITEM_COUNT);
         return 1;
@@ -383,7 +384,7 @@ int main(int argc, char** argv)
     srand(time(NULL));
     int item_prices[MAX_ITEM_COUNT];
     if (item_count == 0) {
-        generateItemPrices(item_prices);
+        item_count = generateItemPrices(item_prices);
     } else {
         for (int i = 0; i < item_count; ++i) {
             sscanf(argv[i + 1], "%d", &item_prices[i]);
