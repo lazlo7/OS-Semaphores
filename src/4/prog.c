@@ -27,11 +27,11 @@ char const* shm_stolen_item_name = "shm-stolen-item";
 char const* shm_loaded_items_name = "shm-loaded-items";
 
 // Semaphore that is used to block stealer when loader is busy.
-char const* sem_block_stealer_name = "/sem-block-stealer";
+char const* sem_block_stealer_name = "sem-block-stealer";
 // Semaphore that is used to block loader when stealer is busy.
-char const* sem_block_loader_name = "/sem-block-loader";
+char const* sem_block_loader_name = "sem-block-loader";
 // Semaphore that is used to trigger observer when a new item is loaded.
-char const* sem_block_observer_name = "/sem-block-observer";
+char const* sem_block_observer_name = "sem-block-observer";
 
 int getRandomNumber(int from, int to)
 {
