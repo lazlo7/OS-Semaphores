@@ -376,7 +376,7 @@ cleanup_shm_loaded_items_fd:
 
 int finished_child_process_count = 0;
 
-// Forked children pid's, used in onChildTerminated callback.
+// Forked children pid's, used in waitForChild.
 pid_t stealer_pid;
 pid_t loader_pid;
 pid_t observer_pid;
@@ -413,12 +413,8 @@ void cleanup(void)
     sem_unlink(sem_block_observer_name);
 }
 
-void onChildTerminated(int signum)
+void waitForChild(void)
 {
-    printf("Child terminated\n");
-
-    (void)signum;
-
     int status;
     pid_t exited_pid = wait(&status);
     if (exited_pid == -1) {
@@ -427,7 +423,6 @@ void onChildTerminated(int signum)
     }
 
     if (WEXITSTATUS(status) == 0) {
-        ++finished_child_process_count;
         return;
     }
 
@@ -495,19 +490,16 @@ int main(int argc, char** argv)
     }
 
     printf("Military intel tells us that there are %d items to steal with prices: \n", item_count);
+    int total_items_price = 0;
     for (int i = 0; i < item_count; ++i) {
+        total_items_price += item_prices[i];
         printf("%d", item_prices[i]);
         if (i + 1 != item_count) {
             printf(", ");
         }
     }
     printf("\n");
-
-    // Register SIGCHLD handler for stealer.
-    if (signal(SIGCHLD, onChildTerminated) == SIG_ERR) {
-        printf("[Error] Failed to register SIGCHLD handler: %s\n", strerror(errno));
-        return 1;
-    }
+    printf("Total items price: %d\n", total_items_price);
 
     stealer_pid = fork();
     if (stealer_pid == -1) {
@@ -521,12 +513,6 @@ int main(int argc, char** argv)
     }
     stealer_pid_defined = true;
 
-    // Register SIGCHLD handler for loader.
-    if (signal(SIGCHLD, onChildTerminated) == SIG_ERR) {
-        printf("[Error] Failed to register SIGCHLD handler: %s\n", strerror(errno));
-        return 1;
-    }
-
     loader_pid = fork();
     if (loader_pid == -1) {
         printf("[Error] Failed to fork for loader: %s\n", strerror(errno));
@@ -538,12 +524,6 @@ int main(int argc, char** argv)
         return emulateLoader(shm_stolen_item_name, shm_loaded_items_name, sem_block_stealer_name, sem_block_loader_name, sem_block_observer_name);
     }
     loader_pid_defined = true;
-
-    // Register SIGCHLD handler for observer.
-    if (signal(SIGCHLD, onChildTerminated) == SIG_ERR) {
-        printf("[Error] Failed to register SIGCHLD handler: %s\n", strerror(errno));
-        return 1;
-    }
 
     observer_pid = fork();
     if (observer_pid == -1) {
@@ -568,11 +548,16 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    // Wait for children to finish.
-    while (finished_child_process_count < 3) {
-    }
+    // Wait for all 3 children to finish.
+    waitForChild();
+    waitForChild();
+    waitForChild();
 
-    printf("Exit.");
+    // Cleaning up resources.
+    cleanup();
+    printf("Cleaned up resources\n");
+
+    printf("Exit.\n");
 
     return 0;
 }
