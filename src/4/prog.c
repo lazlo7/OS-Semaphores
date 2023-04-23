@@ -242,7 +242,7 @@ int emulateLoader(
             goto cleanup_sem_block_observer;
         }
 
-        printf("[Loader] Received new item info from stealer!");
+        printf("[Loader] Received new item info from stealer!\n");
 
         // If the item price is negative, it means that Stealer has no more items to hand over.
         if (stolen_item_price < 0) {
