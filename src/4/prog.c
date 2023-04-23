@@ -486,6 +486,10 @@ int main(int argc, char** argv)
     } else {
         for (int i = 0; i < item_count; ++i) {
             sscanf(argv[i + 1], "%d", &item_prices[i]);
+            if (item_prices[i] < 0) {
+                printf("[Error] Invalid item price: %d\n", item_prices[i]);
+                return 1;
+            }
         }
     }
 
