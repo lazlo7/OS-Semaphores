@@ -115,9 +115,6 @@ int emulateStealer(
             goto cleanup_sem_block_loader;
         }
 
-        int sem_block_loader_value = 999;
-        sem_getvalue(sem_block_loader, &sem_block_loader_value);
-
         // Wait for loader to pick the item from us.
         if (sem_wait(sem_block_stealer) == -1) {
             printf("[Stealer Error] Failed to wait for loader: %s\n", strerror(errno));
