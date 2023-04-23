@@ -63,14 +63,21 @@ int emulateStealer(
     char const* sem_block_loader_name)
 {
     // Open shared memory to hand over items to loader.
-    int const shm_stolen_item_fd = shm_open(shm_stolen_item_name, O_CREAT | O_RDWR, 0666);
+    int shm_stolen_item_fd = shm_open(shm_stolen_item_name, O_CREAT | O_RDWR, 0666);
     if (shm_stolen_item_fd == -1 && errno != EEXIST) {
         printf("[Stealer Error] Failed to open shared memory '%s': %s\n", shm_stolen_item_name, strerror(errno));
         return 1;
     }
 
     int exit_code = 0;
-    int* const shm_stolen_item_addr = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED, shm_stolen_item_fd, 0);
+    // Truncate memory size.
+    if (ftruncate(shm_stolen_item_fd, sizeof(int)) == -1) {
+        printf("[Stealer Error] Failed to truncate memory: %s\n", strerror(errno));
+        exit_code = 1;
+        goto cleanup_shm_stolen_item_fd;
+    }
+
+    int* shm_stolen_item_addr = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED, shm_stolen_item_fd, 0);
     if (shm_stolen_item_addr == MAP_FAILED) {
         printf("[Stealer Error] Failed to map shared memory '%s': %s\n", shm_stolen_item_name, strerror(errno));
         exit_code = 1;
@@ -78,14 +85,14 @@ int emulateStealer(
     }
 
     // Open semaphores.
-    sem_t* const sem_block_stealer = sem_open(sem_block_stealer_name, O_CREAT, 0666, 0);
+    sem_t* sem_block_stealer = sem_open(sem_block_stealer_name, O_CREAT, 0666, 0);
     if (sem_block_stealer == SEM_FAILED) {
         printf("[Stealer Error] Failed to open semaphore '%s': %s\n", sem_block_stealer_name, strerror(errno));
         exit_code = 1;
         goto cleanup_shm_stolen_item_fd;
     }
 
-    sem_t* const sem_block_loader = sem_open(sem_block_loader_name, O_CREAT, 0666, 0);
+    sem_t* sem_block_loader = sem_open(sem_block_loader_name, O_CREAT, 0666, 0);
     if (sem_block_loader == SEM_FAILED) {
         printf("[Stealer Error] Failed to open semaphore '%s': %s\n", sem_block_loader_name, strerror(errno));
         exit_code = 1;
@@ -107,6 +114,9 @@ int emulateStealer(
             exit_code = 1;
             goto cleanup_sem_block_loader;
         }
+
+        int sem_block_loader_value = 999;
+        sem_getvalue(sem_block_loader, &sem_block_loader_value);
 
         // Wait for loader to pick the item from us.
         if (sem_wait(sem_block_stealer) == -1) {
@@ -142,29 +152,43 @@ int emulateLoader(
     char const* sem_block_observer_name)
 {
     // Open shared memory.
-    int const shm_stolen_item_fd = shm_open(shm_stolen_item_name, O_CREAT | O_RDONLY, 0666);
+    int shm_stolen_item_fd = shm_open(shm_stolen_item_name, O_CREAT | O_RDWR, 0666);
     if (shm_stolen_item_fd == -1 && errno != EEXIST) {
         printf("[Loader Error] Failed to open shared memory '%s': %s\n", shm_stolen_item_name, strerror(errno));
         return 1;
     }
 
     int exit_code = 0;
-    int* const shm_stolen_item_addr = mmap(NULL, sizeof(int), PROT_READ, MAP_SHARED, shm_stolen_item_fd, 0);
+    // Truncate memory size.
+    if (ftruncate(shm_stolen_item_fd, sizeof(int)) == -1) {
+        printf("[Loader Error] Failed to truncate memory 1: %s\n", strerror(errno));
+        exit_code = 1;
+        goto cleanup_shm_stolen_item_fd;
+    }
+
+    int* shm_stolen_item_addr = mmap(NULL, sizeof(int), PROT_READ, MAP_SHARED, shm_stolen_item_fd, 0);
     if (shm_stolen_item_addr == MAP_FAILED) {
         printf("[Loader Error] Failed to map shared memory '%s': %s\n", shm_stolen_item_name, strerror(errno));
         exit_code = 1;
         goto cleanup_shm_stolen_item_fd;
     }
 
-    int const shm_loaded_items_fd = shm_open(shm_loaded_items_name, O_CREAT | O_RDWR, 0666);
+    int shm_loaded_items_fd = shm_open(shm_loaded_items_name, O_CREAT | O_RDWR, 0666);
     if (shm_loaded_items_fd == -1 && errno != EEXIST) {
         printf("[Loader Error] Failed to open shared memory '%s': %s\n", shm_loaded_items_name, strerror(errno));
         exit_code = 1;
         goto cleanup_shm_stolen_item_fd;
     }
 
+    // Truncate memory size.
+    if (ftruncate(shm_loaded_items_fd, sizeof(int) * MAX_ITEM_COUNT) == -1) {
+        printf("[Loader Error] Failed to truncate memory 2: %s\n", strerror(errno));
+        exit_code = 1;
+        goto cleanup_shm_loaded_items_fd;
+    }
+
     // Allocating an array of integers of size MAX_ITEM_COUNT.
-    int* const shm_loaded_items_addr = mmap(NULL, sizeof(int) * MAX_ITEM_COUNT, PROT_READ | PROT_WRITE, MAP_SHARED, shm_loaded_items_fd, 0);
+    int* shm_loaded_items_addr = mmap(NULL, sizeof(int) * MAX_ITEM_COUNT, PROT_READ | PROT_WRITE, MAP_SHARED, shm_loaded_items_fd, 0);
     if (shm_loaded_items_addr == MAP_FAILED) {
         printf("[Loader Error] Failed to map shared memory '%s': %s\n", shm_loaded_items_name, strerror(errno));
         exit_code = 1;
@@ -172,21 +196,21 @@ int emulateLoader(
     }
 
     // Open semaphores.
-    sem_t* const sem_block_stealer = sem_open(sem_block_stealer_name, O_CREAT, 0666, 0);
+    sem_t* sem_block_stealer = sem_open(sem_block_stealer_name, O_CREAT, 0666, 0);
     if (sem_block_stealer == SEM_FAILED) {
         printf("[Loader Error] Failed to open semaphore '%s': %s\n", sem_block_stealer_name, strerror(errno));
         exit_code = 1;
         goto cleanup_shm_loaded_items_fd;
     }
 
-    sem_t* const sem_block_loader = sem_open(sem_block_loader_name, O_CREAT, 0666, 0);
+    sem_t* sem_block_loader = sem_open(sem_block_loader_name, O_CREAT, 0666, 0);
     if (sem_block_loader == SEM_FAILED) {
         printf("[Loader Error] Failed to open semaphore '%s': %s\n", sem_block_loader_name, strerror(errno));
         exit_code = 1;
         goto cleanup_sem_block_stealer;
     }
 
-    sem_t* const sem_block_observer = sem_open(sem_block_observer_name, O_CREAT, 0666, 0);
+    sem_t* sem_block_observer = sem_open(sem_block_observer_name, O_CREAT, 0666, 0);
     if (sem_block_observer == SEM_FAILED) {
         printf("[Loader Error] Failed to open semaphore '%s': %s\n", sem_block_observer_name, strerror(errno));
         exit_code = 1;
@@ -270,15 +294,22 @@ cleanup_shm_stolen_item_fd:
 int emulateObserver(char const* sem_block_observer_name)
 {
     // Open shared memory.
-    int const shm_loaded_items_fd = shm_open(shm_loaded_items_name, O_RDWR, 0666);
+    int shm_loaded_items_fd = shm_open(shm_loaded_items_name, O_CREAT | O_RDWR, 0666);
     if (shm_loaded_items_fd == -1 && errno != EEXIST) {
         printf("[Observer Error] Failed to open shared memory '%s': %s\n", shm_loaded_items_name, strerror(errno));
         return 1;
     }
 
     int exit_code = 0;
+    // Truncate memory size.
+    if (ftruncate(shm_loaded_items_fd, sizeof(int) * MAX_ITEM_COUNT) == -1) {
+        printf("[Observer Error] Failed to truncate memory: %s\n", strerror(errno));
+        exit_code = 1;
+        goto cleanup_shm_loaded_items_fd;
+    }
+
     // Allocating an array of integers of size MAX_ITEM_COUNT.
-    int* const shm_loaded_items_addr = mmap(NULL, sizeof(int) * MAX_ITEM_COUNT, PROT_READ | PROT_WRITE, MAP_SHARED, shm_loaded_items_fd, 0);
+    int* shm_loaded_items_addr = mmap(NULL, sizeof(int) * MAX_ITEM_COUNT, PROT_READ | PROT_WRITE, MAP_SHARED, shm_loaded_items_fd, 0);
     if (shm_loaded_items_addr == MAP_FAILED) {
         printf("[Observer Error] Failed to map shared memory '%s': %s\n", shm_loaded_items_name, strerror(errno));
         exit_code = 1;
@@ -286,7 +317,7 @@ int emulateObserver(char const* sem_block_observer_name)
     }
 
     // Open semaphore.
-    sem_t* const sem_block_observer = sem_open(sem_block_observer_name, O_CREAT, 0666, 0);
+    sem_t* sem_block_observer = sem_open(sem_block_observer_name, O_CREAT, 0666, 0);
     if (sem_block_observer == SEM_FAILED) {
         printf("[Observer Error] Failed to open semaphore '%s': %s\n", sem_block_observer_name, strerror(errno));
         exit_code = 1;
@@ -307,7 +338,7 @@ int emulateObserver(char const* sem_block_observer_name)
             goto cleanup_sem_block_observer;
         }
 
-        int const loaded_item_price = shm_loaded_items_addr[loaded_item_count];
+        int loaded_item_price = shm_loaded_items_addr[loaded_item_count];
         if (loaded_item_price < 0) {
             printf("[Observer] No more items to observe, exiting...\n");
             // Clear the negative price.
@@ -380,7 +411,7 @@ void onChildTerminated(int signum)
     (void)signum;
 
     int status;
-    pid_t const exited_pid = wait(&status);
+    pid_t exited_pid = wait(&status);
     if (exited_pid == -1) {
         printf("[Error] Failed to wait for child process: %s\n", strerror(errno));
         return;
@@ -475,10 +506,12 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    
     if (stealer_pid == 0) {
         // Stealer.
         return emulateStealer(item_prices, item_count, shm_stolen_item_name, sem_block_stealer_name, sem_block_loader_name);
     }
+    stealer_pid_defined = true;
 
     loader_pid = fork();
     if (loader_pid == -1) {
@@ -490,6 +523,7 @@ int main(int argc, char** argv)
         // Loader.
         return emulateLoader(shm_stolen_item_name, shm_loaded_items_name, sem_block_stealer_name, sem_block_loader_name, sem_block_observer_name);
     }
+    loader_pid_defined = true;
 
     observer_pid = fork();
     if (observer_pid == -1) {
@@ -501,13 +535,14 @@ int main(int argc, char** argv)
         // Observer.
         return emulateObserver(sem_block_observer_name);
     }
+    observer_pid_defined = true;
 
     // Register SIGINT handler.
     // On SIGINT, we should kill all forked processes, exit the program.
     // Note that we register a SIGINT handler only after all processes have been forked,
     // so that only the main process would have this handler.
     // When forking, a child process will inherit all of the parent's signal's handlers,
-    // and we don't want children to have SIGINt handlers. 
+    // and we don't want children to have SIGINt handlers.
     if (signal(SIGINT, onInterruptReceived)) {
         printf("[Error] Failed to register SIGINT handler: %s\n", strerror(errno));
         return 1;
