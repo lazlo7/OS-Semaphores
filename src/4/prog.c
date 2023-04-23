@@ -374,8 +374,6 @@ cleanup_shm_loaded_items_fd:
     return exit_code;
 }
 
-int finished_child_process_count = 0;
-
 // Forked children pid's, used in waitForChild.
 pid_t stealer_pid;
 pid_t loader_pid;
