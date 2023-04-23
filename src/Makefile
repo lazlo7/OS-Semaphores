@@ -12,4 +12,4 @@ mark5: 5/prog.c
 	$(CC) $(CFLAGS) $(POSIX_SEM_FLAG) $(POSIX_SHM_FLAG) 5/prog.c -o mark5
 
 clean:
-	rm -f mark4
+	rm -f mark4 mark5
