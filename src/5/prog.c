@@ -28,11 +28,17 @@ char const* shm_stolen_item_name = "shm-stolen-item";
 char const* shm_loaded_items_name = "shm-loaded-items";
 
 // Semaphore that is used to block stealer when loader is busy.
-char const* sem_block_stealer_name = "sem-block-stealer";
+char const* shm_sem_block_stealer_name = "shm-sem-block-stealer";
+sem_t* sem_block_stealer;
+int sem_block_stealer_fd;
 // Semaphore that is used to block loader when stealer is busy.
-char const* sem_block_loader_name = "sem-block-loader";
+char const* shm_sem_block_loader_name = "shm-sem-block-loader";
+sem_t* sem_block_loader;
+int sem_block_loader_fd;
 // Semaphore that is used to trigger observer when a new item is loaded.
-char const* sem_block_observer_name = "sem-block-observer";
+char const* shm_sem_block_observer_name = "shm-sem-block-observer";
+sem_t* sem_block_observer;
+int sem_block_observer_fd;
 
 int getRandomNumber(int from, int to)
 {
@@ -57,10 +63,7 @@ void emulateActivity(void)
 // aka "Иванов"
 int emulateStealer(
     int* item_prices,
-    int item_count,
-    char const* shm_stolen_item_name,
-    char const* sem_block_stealer_name,
-    char const* sem_block_loader_name)
+    int item_count)
 {
     // Open shared memory to hand over items to loader.
     int shm_stolen_item_fd = shm_open(shm_stolen_item_name, O_CREAT | O_RDWR, 0666);
@@ -74,29 +77,14 @@ int emulateStealer(
     if (ftruncate(shm_stolen_item_fd, sizeof(int)) == -1) {
         printf("[Stealer Error] Failed to truncate memory: %s\n", strerror(errno));
         exit_code = 1;
-        goto cleanup_shm_stolen_item_fd;
+        goto cleanup;
     }
 
     int* shm_stolen_item_addr = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED, shm_stolen_item_fd, 0);
     if (shm_stolen_item_addr == MAP_FAILED) {
         printf("[Stealer Error] Failed to map shared memory '%s': %s\n", shm_stolen_item_name, strerror(errno));
         exit_code = 1;
-        goto cleanup_shm_stolen_item_fd;
-    }
-
-    // Open semaphores.
-    sem_t* sem_block_stealer = sem_open(sem_block_stealer_name, O_CREAT, 0666, 0);
-    if (sem_block_stealer == SEM_FAILED) {
-        printf("[Stealer Error] Failed to open semaphore '%s': %s\n", sem_block_stealer_name, strerror(errno));
-        exit_code = 1;
-        goto cleanup_shm_stolen_item_fd;
-    }
-
-    sem_t* sem_block_loader = sem_open(sem_block_loader_name, O_CREAT, 0666, 0);
-    if (sem_block_loader == SEM_FAILED) {
-        printf("[Stealer Error] Failed to open semaphore '%s': %s\n", sem_block_loader_name, strerror(errno));
-        exit_code = 1;
-        goto cleanup_sem_block_stealer;
+        goto cleanup;
     }
 
     printf("[Stealer] Started!\n");
@@ -112,14 +100,14 @@ int emulateStealer(
         if (sem_post(sem_block_loader) == -1) {
             printf("[Stealer Error] Failed to unblock loader: %s\n", strerror(errno));
             exit_code = 1;
-            goto cleanup_sem_block_loader;
+            goto cleanup;
         }
 
         // Wait for loader to pick the item from us.
         if (sem_wait(sem_block_stealer) == -1) {
             printf("[Stealer Error] Failed to wait for loader: %s\n", strerror(errno));
             exit_code = 1;
-            goto cleanup_sem_block_loader;
+            goto cleanup;
         }
 
         printf("[Stealer] Handed over an item to loader!\n");
@@ -132,15 +120,10 @@ int emulateStealer(
     if (sem_post(sem_block_loader) == -1) {
         printf("[Stealer Error] Failed to unblock loader: %s\n", strerror(errno));
         exit_code = 1;
-        goto cleanup_sem_block_loader;
     }
 
-// Resources cleanup.
-cleanup_sem_block_loader:
-    sem_close(sem_block_loader);
-cleanup_sem_block_stealer:
-    sem_close(sem_block_stealer);
-cleanup_shm_stolen_item_fd:
+// Resource cleanup.
+cleanup:
     close(shm_stolen_item_fd);
 
     if (exit_code == 0) {
@@ -151,12 +134,7 @@ cleanup_shm_stolen_item_fd:
 }
 
 // aka "Петров"
-int emulateLoader(
-    char const* shm_stolen_item_name,
-    char const* shm_loaded_items_name,
-    char const* sem_block_stealer_name,
-    char const* sem_block_loader_name,
-    char const* sem_block_observer_name)
+int emulateLoader(void)
 {
     // Open shared memory.
     int shm_stolen_item_fd = shm_open(shm_stolen_item_name, O_CREAT | O_RDWR, 0666);
@@ -202,28 +180,6 @@ int emulateLoader(
         goto cleanup_shm_loaded_items_fd;
     }
 
-    // Open semaphores.
-    sem_t* sem_block_stealer = sem_open(sem_block_stealer_name, O_CREAT, 0666, 0);
-    if (sem_block_stealer == SEM_FAILED) {
-        printf("[Loader Error] Failed to open semaphore '%s': %s\n", sem_block_stealer_name, strerror(errno));
-        exit_code = 1;
-        goto cleanup_shm_loaded_items_fd;
-    }
-
-    sem_t* sem_block_loader = sem_open(sem_block_loader_name, O_CREAT, 0666, 0);
-    if (sem_block_loader == SEM_FAILED) {
-        printf("[Loader Error] Failed to open semaphore '%s': %s\n", sem_block_loader_name, strerror(errno));
-        exit_code = 1;
-        goto cleanup_sem_block_stealer;
-    }
-
-    sem_t* sem_block_observer = sem_open(sem_block_observer_name, O_CREAT, 0666, 0);
-    if (sem_block_observer == SEM_FAILED) {
-        printf("[Loader Error] Failed to open semaphore '%s': %s\n", sem_block_observer_name, strerror(errno));
-        exit_code = 1;
-        goto cleanup_sem_block_loader;
-    }
-
     printf("[Loader] Started!\n");
 
     // Assume that Loader knows beforehand that there are no more than MAX_ITEM_COUNT items to load.
@@ -234,7 +190,7 @@ int emulateLoader(
         if (sem_wait(sem_block_loader) == -1) {
             printf("[Loader Error] Failed to wait for stealer: %s\n", strerror(errno));
             exit_code = 1;
-            goto cleanup_sem_block_observer;
+            goto cleanup_shm_loaded_items_fd;
         }
 
         // Receive the item from Stealer.
@@ -246,7 +202,7 @@ int emulateLoader(
         if (sem_post(sem_block_stealer) == -1) {
             printf("[Loader Error] Failed to unblock stealer: %s\n", strerror(errno));
             exit_code = 1;
-            goto cleanup_sem_block_observer;
+            goto cleanup_shm_loaded_items_fd;
         }
 
         printf("[Loader] Received new item info from stealer!\n");
@@ -257,7 +213,7 @@ int emulateLoader(
             if (sem_post(sem_block_observer) == -1) {
                 printf("[Loader Error] Failed to unblock observer: %s\n", strerror(errno));
                 exit_code = 1;
-                goto cleanup_sem_block_observer;
+                goto cleanup_shm_loaded_items_fd;
             }
 
             break;
@@ -272,19 +228,13 @@ int emulateLoader(
         if (sem_post(sem_block_observer) == -1) {
             printf("[Loader Error] Failed to unblock observer: %s\n", strerror(errno));
             exit_code = 1;
-            goto cleanup_sem_block_observer;
+            goto cleanup_shm_loaded_items_fd;
         }
 
         printf("[Loader] Notified observer about a new item!\n");
     }
 
 // Resources cleanup.
-cleanup_sem_block_observer:
-    sem_close(sem_block_observer);
-cleanup_sem_block_loader:
-    sem_close(sem_block_loader);
-cleanup_sem_block_stealer:
-    sem_close(sem_block_stealer);
 cleanup_shm_loaded_items_fd:
     close(shm_loaded_items_fd);
 cleanup_shm_stolen_item_fd:
@@ -298,7 +248,7 @@ cleanup_shm_stolen_item_fd:
 }
 
 // aka "Нечепорук"
-int emulateObserver(char const* sem_block_observer_name)
+int emulateObserver(void)
 {
     // Open shared memory.
     int shm_loaded_items_fd = shm_open(shm_loaded_items_name, O_CREAT | O_RDWR, 0666);
@@ -312,7 +262,7 @@ int emulateObserver(char const* sem_block_observer_name)
     if (ftruncate(shm_loaded_items_fd, sizeof(int) * MAX_ITEM_COUNT) == -1) {
         printf("[Observer Error] Failed to truncate memory: %s\n", strerror(errno));
         exit_code = 1;
-        goto cleanup_shm_loaded_items_fd;
+        goto cleanup;
     }
 
     // Allocating an array of integers of size MAX_ITEM_COUNT.
@@ -320,15 +270,7 @@ int emulateObserver(char const* sem_block_observer_name)
     if (shm_loaded_items_addr == MAP_FAILED) {
         printf("[Observer Error] Failed to map shared memory '%s': %s\n", shm_loaded_items_name, strerror(errno));
         exit_code = 1;
-        goto cleanup_shm_loaded_items_fd;
-    }
-
-    // Open semaphore.
-    sem_t* sem_block_observer = sem_open(sem_block_observer_name, O_CREAT, 0666, 0);
-    if (sem_block_observer == SEM_FAILED) {
-        printf("[Observer Error] Failed to open semaphore '%s': %s\n", sem_block_observer_name, strerror(errno));
-        exit_code = 1;
-        goto cleanup_shm_loaded_items_fd;
+        goto cleanup;
     }
 
     int total_items_price = 0;
@@ -342,7 +284,7 @@ int emulateObserver(char const* sem_block_observer_name)
         if (sem_wait(sem_block_observer) == -1) {
             printf("[Observer Error] Failed to wait for loader: %s\n", strerror(errno));
             exit_code = 1;
-            goto cleanup_sem_block_observer;
+            goto cleanup;
         }
 
         int loaded_item_price = shm_loaded_items_addr[loaded_item_count];
@@ -362,9 +304,7 @@ int emulateObserver(char const* sem_block_observer_name)
             loaded_item_price, total_items_price, loaded_item_count + 1);
     }
 
-cleanup_sem_block_observer:
-    sem_close(sem_block_observer);
-cleanup_shm_loaded_items_fd:
+cleanup:
     close(shm_loaded_items_fd);
 
     if (exit_code == 0) {
@@ -373,8 +313,6 @@ cleanup_shm_loaded_items_fd:
 
     return exit_code;
 }
-
-int finished_child_process_count = 0;
 
 // Forked children pid's, used in waitForChild.
 pid_t stealer_pid;
@@ -398,6 +336,21 @@ void killForked(pid_t forked)
     }
 }
 
+void cleanupSemaphore(sem_t* sem, int shm_fd, char const* shm_semaphore_name)
+{
+    sem_destroy(sem);
+    close(shm_fd);
+    unlink(shm_semaphore_name);
+}
+
+// Destroy all semaphores, close all shm fd's and unlink all shm.
+void cleanupSemaphores(void)
+{
+    cleanupSemaphore(sem_block_stealer, sem_block_stealer_fd, shm_sem_block_stealer_name);
+    cleanupSemaphore(sem_block_loader, sem_block_loader_fd, shm_sem_block_loader_name);
+    cleanupSemaphore(sem_block_observer, sem_block_observer_fd, shm_sem_block_observer_name);
+}
+
 // Performs a cleanup of all shm and semaphores.
 // Note that even if this function gets called when some of the shm/semaphores
 // don't event exist, shm_unlink() and sem_unlink() will just fail silently.
@@ -407,10 +360,8 @@ void cleanup(void)
     shm_unlink(shm_stolen_item_name);
     shm_unlink(shm_loaded_items_name);
 
-    // Unlink all semaphores.
-    sem_unlink(sem_block_stealer_name);
-    sem_unlink(sem_block_loader_name);
-    sem_unlink(sem_block_observer_name);
+    // Cleanup semaphores.
+    cleanupSemaphores();
 }
 
 void waitForChild(void)
@@ -470,6 +421,45 @@ void onInterruptReceived(int signum)
     exit(0);
 }
 
+// Returns fd of the opened shared memory.
+// Returns -1 for errors.
+int initSemaphore(char const* shm_semaphore_name, sem_t* sem)
+{
+    // Open shm.
+    int shm_fd = shm_open(shm_semaphore_name, O_CREAT | O_RDWR, 0666);
+    if (shm_fd == -1) {
+        printf("[Error] Failed to open shared memory for semaphore '%s': %s", shm_semaphore_name, strerror(errno));
+        return -1;
+    }
+
+    // Truncate memory for semaphore.
+    if (ftruncate(shm_fd, sizeof(sem_t)) == -1) {
+        printf("[Error] Failed to truncate memory for semaphore '%s': %s", shm_semaphore_name, strerror(errno));
+        close(shm_fd);
+        shm_unlink(shm_semaphore_name);
+        return -1;
+    }
+
+    // Map memory for semaphore.
+    sem = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    if (sem == MAP_FAILED) {
+        printf("[Error] Failed to map memory for semaphore '%s': %s", shm_semaphore_name, strerror(errno));
+        close(shm_fd);
+        shm_unlink(shm_semaphore_name);
+        return -1;
+    }
+
+    // Initialize semaphore.
+    if (sem_init(sem, 1, 0) == -1) {
+        printf("[Error] Failed to initialize semaphore '%s': %s", shm_semaphore_name, strerror(errno));
+        close(shm_fd);
+        shm_unlink(shm_semaphore_name);
+        return -1;
+    }
+
+    return shm_fd;
+}
+
 int main(int argc, char** argv)
 {
     // Parse item prices.
@@ -505,39 +495,64 @@ int main(int argc, char** argv)
     printf("\n");
     printf("Total items price: %d\n", total_items_price);
 
+    // Open semaphores.
+    sem_block_stealer_fd = initSemaphore(shm_sem_block_stealer_name, sem_block_stealer);
+    if (sem_block_stealer_fd == -1) {
+        printf("[Error] Failed to init semaphore for stealer, exiting.\n");
+        return 1;
+    }
+
+    sem_block_loader_fd = initSemaphore(shm_sem_block_loader_name, sem_block_loader);
+    if (sem_block_stealer_fd == -1) {
+        printf("[Error] Failed to init semaphore for loader, exiting.\n");
+        cleanupSemaphore(sem_block_stealer, sem_block_stealer_fd, shm_sem_block_stealer_name);
+        return 1;
+    }
+
+    sem_block_observer_fd = initSemaphore(shm_sem_block_observer_name, sem_block_observer);
+    if (sem_block_stealer_fd == -1) {
+        printf("[Error] Failed to init semaphore for observer, exiting.\n");
+        cleanupSemaphore(sem_block_stealer, sem_block_stealer_fd, shm_sem_block_stealer_name);
+        cleanupSemaphore(sem_block_loader, sem_block_loader_fd, shm_sem_block_loader_name);
+        return 1;
+    }
+
     stealer_pid = fork();
     if (stealer_pid == -1) {
         printf("[Error] Failed to fork for stealer: %s\n", strerror(errno));
+        cleanupSemaphores();
         return 1;
     }
 
     if (stealer_pid == 0) {
         // Stealer.
-        return emulateStealer(item_prices, item_count, shm_stolen_item_name, sem_block_stealer_name, sem_block_loader_name);
+        return emulateStealer(item_prices, item_count);
     }
     stealer_pid_defined = true;
 
     loader_pid = fork();
     if (loader_pid == -1) {
         printf("[Error] Failed to fork for loader: %s\n", strerror(errno));
+        cleanup();
         return 1;
     }
 
     if (loader_pid == 0) {
         // Loader.
-        return emulateLoader(shm_stolen_item_name, shm_loaded_items_name, sem_block_stealer_name, sem_block_loader_name, sem_block_observer_name);
+        return emulateLoader();
     }
     loader_pid_defined = true;
 
     observer_pid = fork();
     if (observer_pid == -1) {
         printf("[Error] Failed to fork for observer: %s\n", strerror(errno));
+        cleanup();
         return 1;
     }
 
     if (observer_pid == 0) {
         // Observer.
-        return emulateObserver(sem_block_observer_name);
+        return emulateObserver();
     }
     observer_pid_defined = true;
 
@@ -547,8 +562,9 @@ int main(int argc, char** argv)
     // so that only the main process would have this handler.
     // When forking, a child process will inherit all of the parent's signal's handlers,
     // and we don't want children to have SIGINt handlers.
-    if (signal(SIGINT, onInterruptReceived)) {
+    if (signal(SIGINT, onInterruptReceived) == SIG_ERR) {
         printf("[Error] Failed to register SIGINT handler: %s\n", strerror(errno));
+        cleanup();
         return 1;
     }
 
