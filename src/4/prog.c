@@ -125,6 +125,16 @@ int emulateStealer(
         printf("[Stealer] Handed over an item to loader!\n");
     }
 
+    // As a way to notify loader that there are no more items to load,
+    // we hand over a negative price.
+    printf("[Stealer] No more items to steal, notifying loader and exiting...\n");
+    *shm_stolen_item_addr = -1;
+    if (sem_post(sem_block_loader) == -1) {
+        printf("[Stealer Error] Failed to unblock loader: %s\n", strerror(errno));
+        exit_code = 1;
+        goto cleanup_sem_block_loader;
+    }
+
 // Resources cleanup.
 cleanup_sem_block_loader:
     sem_close(sem_block_loader);
@@ -405,6 +415,8 @@ void cleanup(void)
 
 void onChildTerminated(int signum)
 {
+    printf("Child terminated\n");
+
     (void)signum;
 
     int status;
@@ -491,7 +503,7 @@ int main(int argc, char** argv)
     }
     printf("\n");
 
-    // Register SIGCHLD handler.
+    // Register SIGCHLD handler for stealer.
     if (signal(SIGCHLD, onChildTerminated) == SIG_ERR) {
         printf("[Error] Failed to register SIGCHLD handler: %s\n", strerror(errno));
         return 1;
@@ -503,12 +515,17 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    
     if (stealer_pid == 0) {
         // Stealer.
         return emulateStealer(item_prices, item_count, shm_stolen_item_name, sem_block_stealer_name, sem_block_loader_name);
     }
     stealer_pid_defined = true;
+
+    // Register SIGCHLD handler for loader.
+    if (signal(SIGCHLD, onChildTerminated) == SIG_ERR) {
+        printf("[Error] Failed to register SIGCHLD handler: %s\n", strerror(errno));
+        return 1;
+    }
 
     loader_pid = fork();
     if (loader_pid == -1) {
@@ -521,6 +538,12 @@ int main(int argc, char** argv)
         return emulateLoader(shm_stolen_item_name, shm_loaded_items_name, sem_block_stealer_name, sem_block_loader_name, sem_block_observer_name);
     }
     loader_pid_defined = true;
+
+    // Register SIGCHLD handler for observer.
+    if (signal(SIGCHLD, onChildTerminated) == SIG_ERR) {
+        printf("[Error] Failed to register SIGCHLD handler: %s\n", strerror(errno));
+        return 1;
+    }
 
     observer_pid = fork();
     if (observer_pid == -1) {
@@ -548,6 +571,8 @@ int main(int argc, char** argv)
     // Wait for children to finish.
     while (finished_child_process_count < 3) {
     }
+
+    printf("Exit.");
 
     return 0;
 }
