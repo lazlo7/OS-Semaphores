@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <semaphore.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,6 +52,23 @@ int generateItemPrices(int* item_prices)
 void emulateActivity(void)
 {
     sleep(getRandomNumber(MIN_RANDOM_DELAY, MAX_RANDOM_DELAY));
+}
+
+// Performs a cleanup of all shm and semaphores.
+// Note that even if this function gets called when some of the shm/semaphores
+// don't event exist, shm_unlink() and sem_unlink() will just fail silently.
+void cleanup(int signum)
+{
+    (void)signum;
+
+    // Unlink all shm.
+    shm_unlink(shm_stolen_item_name);
+    shm_unlink(shm_loaded_items_name);
+
+    // Unlink all semaphores.
+    sem_unlink(sem_block_stealer_name);
+    sem_unlink(sem_block_loader_name);
+    sem_unlink(sem_block_observer_name);
 }
 
 // aka "Иванов"
@@ -342,10 +360,26 @@ pid_t stealer_pid;
 pid_t loader_pid;
 pid_t observer_pid;
 
+// Since these pid's are assigned in main, but we use them in SIGINT handler,
+// which can be called even before the pid's are assigned, we need to prevent this
+// race condition by introducing defined bool variables.
+bool stealer_pid_defined = false;
+bool loader_pid_defined = false;
+bool observer_pid_defined = false;
+
+// This helper function only kills a forked child if it's bool 'defined' value is true.
+void killForked(pid_t forked)
+{
+    if ((forked == stealer_pid && stealer_pid_defined)
+        || (forked == loader_pid && loader_pid_defined)
+        || (forked == observer_pid && observer_pid_defined)) {
+        kill(forked, SIGKILL);
+    }
+}
+
 void onChildTerminated(int signum)
 {
     (void)signum;
-
 
     int status;
     pid_t const exited_pid = wait(&status);
@@ -362,16 +396,16 @@ void onChildTerminated(int signum)
     // An error must have occurred. Kill all other child processes.
     if (exited_pid == stealer_pid) {
         printf("[Error] Stealer failed, killing loader and observer...\n");
-        kill(loader_pid, SIGKILL);
-        kill(observer_pid, SIGKILL);
+        killForked(loader_pid);
+        killForked(observer_pid);
     } else if (exited_pid == loader_pid) {
         printf("[Error] Loader failed, killing stealer and observer...\n");
-        kill(stealer_pid, SIGKILL);
-        kill(observer_pid, SIGKILL);
+        killForked(stealer_pid);
+        killForked(observer_pid);
     } else if (exited_pid == observer_pid) {
         printf("[Error] Observer failed, killing stealer and loader...\n");
-        kill(stealer_pid, SIGKILL);
-        kill(loader_pid, SIGKILL);
+        killForked(stealer_pid);
+        killForked(loader_pid);
     }
 
     exit(1);
@@ -408,6 +442,13 @@ int main(int argc, char** argv)
     // Register SIGCHLD handler.
     if (signal(SIGCHLD, onChildTerminated) == SIG_ERR) {
         printf("[Error] Failed to register SIGCHLD handler: %s\n", strerror(errno));
+        return 1;
+    }
+
+    // Register SIGINT handler.
+    // On SIGINT, we should kill all forked processes, exit the program
+    if (signal(SIGINT, cleanup)) {
+        printf("[Error] Failed to register SIGINT handler: %s\n", strerror(errno));
         return 1;
     }
 
