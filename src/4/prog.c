@@ -54,23 +54,6 @@ void emulateActivity(void)
     sleep(getRandomNumber(MIN_RANDOM_DELAY, MAX_RANDOM_DELAY));
 }
 
-// Performs a cleanup of all shm and semaphores.
-// Note that even if this function gets called when some of the shm/semaphores
-// don't event exist, shm_unlink() and sem_unlink() will just fail silently.
-void cleanup(int signum)
-{
-    (void)signum;
-
-    // Unlink all shm.
-    shm_unlink(shm_stolen_item_name);
-    shm_unlink(shm_loaded_items_name);
-
-    // Unlink all semaphores.
-    sem_unlink(sem_block_stealer_name);
-    sem_unlink(sem_block_loader_name);
-    sem_unlink(sem_block_observer_name);
-}
-
 // aka "Иванов"
 int emulateStealer(
     int* item_prices,
@@ -377,6 +360,21 @@ void killForked(pid_t forked)
     }
 }
 
+// Performs a cleanup of all shm and semaphores.
+// Note that even if this function gets called when some of the shm/semaphores
+// don't event exist, shm_unlink() and sem_unlink() will just fail silently.
+void cleanup(void)
+{
+    // Unlink all shm.
+    shm_unlink(shm_stolen_item_name);
+    shm_unlink(shm_loaded_items_name);
+
+    // Unlink all semaphores.
+    sem_unlink(sem_block_stealer_name);
+    sem_unlink(sem_block_loader_name);
+    sem_unlink(sem_block_observer_name);
+}
+
 void onChildTerminated(int signum)
 {
     (void)signum;
@@ -408,7 +406,33 @@ void onChildTerminated(int signum)
         killForked(loader_pid);
     }
 
+    // Cleanup resources.
+    cleanup();
+    printf("Cleaned up resources\n");
+
+    // Exit with error.
+    printf("Exit.\n");
     exit(1);
+}
+
+void onInterruptReceived(int signum)
+{
+    printf("SIGINT Received, killing all forked processes, cleaning up resources and exiting...\n");
+    (void)signum;
+
+    // Kill all forked processes.
+    killForked(stealer_pid);
+    killForked(loader_pid);
+    killForked(observer_pid);
+    printf("Killed all forked processes\n");
+
+    // Cleanup resources.
+    cleanup();
+    printf("Cleaned up resources\n");
+
+    // Exit with success (we don't consider a SIGINT an error).
+    printf("Exit.\n");
+    exit(0);
 }
 
 int main(int argc, char** argv)
@@ -445,13 +469,6 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    // Register SIGINT handler.
-    // On SIGINT, we should kill all forked processes, exit the program
-    if (signal(SIGINT, cleanup)) {
-        printf("[Error] Failed to register SIGINT handler: %s\n", strerror(errno));
-        return 1;
-    }
-
     stealer_pid = fork();
     if (stealer_pid == -1) {
         printf("[Error] Failed to fork for stealer: %s\n", strerror(errno));
@@ -483,6 +500,17 @@ int main(int argc, char** argv)
     if (observer_pid == 0) {
         // Observer.
         return emulateObserver(sem_block_observer_name);
+    }
+
+    // Register SIGINT handler.
+    // On SIGINT, we should kill all forked processes, exit the program.
+    // Note that we register a SIGINT handler only after all processes have been forked,
+    // so that only the main process would have this handler.
+    // When forking, a child process will inherit all of the parent's signal's handlers,
+    // and we don't want children to have SIGINt handlers. 
+    if (signal(SIGINT, onInterruptReceived)) {
+        printf("[Error] Failed to register SIGINT handler: %s\n", strerror(errno));
+        return 1;
     }
 
     // Wait for children to finish.
