@@ -545,7 +545,7 @@ int main(int argc, char** argv)
     // so that only the main process would have this handler.
     // When forking, a child process will inherit all of the parent's signal's handlers,
     // and we don't want children to have SIGINt handlers.
-    if (signal(SIGINT, onInterruptReceived)) {
+    if (signal(SIGINT, onInterruptReceived) == SIG_ERR) {
         printf("[Error] Failed to register SIGINT handler: %s\n", strerror(errno));
         return 1;
     }
