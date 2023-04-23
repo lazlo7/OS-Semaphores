@@ -1,6 +1,5 @@
 #include <errno.h>
 #include <fcntl.h>
-#include <semaphore.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -8,6 +7,7 @@
 #include <string.h>
 #include <sys/ipc.h>
 #include <sys/mman.h>
+#include <sys/sem.h>
 #include <sys/shm.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -32,17 +32,30 @@ int shm_loaded_items_id;
 int* shm_loaded_items;
 
 // Semaphore that is used to block stealer when loader is busy.
-char const* shm_sem_block_stealer_name = "shm-sem-block-stealer";
-sem_t* sem_block_stealer;
-int sem_block_stealer_fd;
+int sem_block_stealer;
 // Semaphore that is used to block loader when stealer is busy.
-char const* shm_sem_block_loader_name = "shm-sem-block-loader";
-sem_t* sem_block_loader;
-int sem_block_loader_fd;
+int sem_block_loader;
 // Semaphore that is used to trigger observer when a new item is loaded.
-char const* shm_sem_block_observer_name = "shm-sem-block-observer";
-sem_t* sem_block_observer;
-int sem_block_observer_fd;
+int sem_block_observer;
+
+// Posix semaphores are so much more intuitive than Unix System V semaphores,
+// that we'll be emulating it's api with these helper functions.
+int sem_post(int sem_id)
+{
+    struct sembuf sem_op = { 0, 1, 0 };
+    return semop(sem_id, &sem_op, 1);
+}
+
+int sem_wait(int sem_id)
+{
+    struct sembuf sem_op = { 0, -1, 0 };
+    return semop(sem_id, &sem_op, 1);
+}
+
+int sem_destroy(int sem_id)
+{
+    return semctl(sem_id, 0, IPC_RMID);
+}
 
 int getRandomNumber(int from, int to)
 {
@@ -251,19 +264,12 @@ void killForked(pid_t forked)
     }
 }
 
-void cleanupSemaphore(sem_t* sem, int shm_fd, char const* shm_semaphore_name)
-{
-    sem_destroy(sem);
-    close(shm_fd);
-    unlink(shm_semaphore_name);
-}
-
 // Destroy all semaphores, close all shm fd's and unlink all shm.
 void cleanupSemaphores(void)
 {
-    cleanupSemaphore(sem_block_stealer, sem_block_stealer_fd, shm_sem_block_stealer_name);
-    cleanupSemaphore(sem_block_loader, sem_block_loader_fd, shm_sem_block_loader_name);
-    cleanupSemaphore(sem_block_observer, sem_block_observer_fd, shm_sem_block_observer_name);
+    sem_destroy(sem_block_stealer);
+    sem_destroy(sem_block_loader);
+    sem_destroy(sem_block_observer);
 }
 
 // Remove all shm's.
@@ -346,43 +352,31 @@ void onInterruptReceived(int signum)
     exit(0);
 }
 
-// Returns fd of the opened shared memory.
-// Returns -1 for errors.
-int initSemaphore(char const* shm_semaphore_name, sem_t** sem)
-{
-    // Open shm.
-    int shm_fd = shm_open(shm_semaphore_name, O_CREAT | O_RDWR, 0666);
-    if (shm_fd == -1) {
-        printf("[Error] Failed to open shared memory for semaphore '%s': %s", shm_semaphore_name, strerror(errno));
+// Returns semaphore id of the new semaphore.
+// Returns -1 on error.
+int initSemaphore(char const* filename_key, int proj_id)
+{   
+    // Generate key from file.
+    key_t key = ftok(filename_key, proj_id);
+    if (key == -1) {
+        printf("[Error] Failed to generate key: %s\n", strerror(errno));
         return -1;
     }
 
-    // Truncate memory for semaphore.
-    if (ftruncate(shm_fd, sizeof(sem_t)) == -1) {
-        printf("[Error] Failed to truncate memory for semaphore '%s': %s", shm_semaphore_name, strerror(errno));
-        close(shm_fd);
-        shm_unlink(shm_semaphore_name);
+    // Create semaphore.
+    int sem_id = semget(key, 1, IPC_CREAT | 0666);
+    if (sem_id == -1) {
+        printf("[Error] Failed to create semaphore: %s\n", strerror(errno));
         return -1;
     }
 
-    // Map memory for semaphore.
-    *sem = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    if (*sem == MAP_FAILED) {
-        printf("[Error] Failed to map memory for semaphore '%s': %s", shm_semaphore_name, strerror(errno));
-        close(shm_fd);
-        shm_unlink(shm_semaphore_name);
+    // Initialize semaphore to 0.
+    if (semctl(sem_id, 0, SETVAL, 0) == -1) {
+        printf("[Error] Failed to initialize semaphore: %s\n", strerror(errno));
         return -1;
     }
 
-    // Initialize semaphore.
-    if (sem_init(*sem, 1, 0) == -1) {
-        printf("[Error] Failed to initialize semaphore '%s': %s", shm_semaphore_name, strerror(errno));
-        close(shm_fd);
-        shm_unlink(shm_semaphore_name);
-        return -1;
-    }
-
-    return shm_fd;
+    return sem_id;
 }
 
 int main(int argc, char** argv)
@@ -421,13 +415,13 @@ int main(int argc, char** argv)
     printf("Total items price: %d\n", total_items_price);
 
     // Initialize shm's
-    key_t const shm_stolen_item_key = ftok("./mark6", 0);
+    key_t const shm_stolen_item_key = ftok(argv[0], 0);
     if (shm_stolen_item_key == -1) {
         printf("[Error] Failed to generate key for shared memory: %s\n", strerror(errno));
         return 1;
     }
 
-    key_t const shm_loaded_items_key = ftok("./mark6", 1);
+    key_t const shm_loaded_items_key = ftok(argv[0], 1);
     if (shm_loaded_items_key == -1) {
         printf("[Error] Failed to generate key for shared memory: %s\n", strerror(errno));
         return 1;
@@ -464,28 +458,27 @@ int main(int argc, char** argv)
     }
 
     // Open semaphores.
-    sem_block_stealer_fd
-        = initSemaphore(shm_sem_block_stealer_name, &sem_block_stealer);
-    if (sem_block_stealer_fd == -1) {
-        printf("[Error] Failed to init semaphore for stealer, exiting.\n");
+    sem_block_stealer = initSemaphore(argv[0], 2);
+    if (sem_block_stealer == -1) {
+        printf("[Error] Failed to initialize semaphore: %s\n", strerror(errno));
         cleanupSharedMemories();
         return 1;
     }
 
-    sem_block_loader_fd = initSemaphore(shm_sem_block_loader_name, &sem_block_loader);
-    if (sem_block_stealer_fd == -1) {
-        printf("[Error] Failed to init semaphore for loader, exiting.\n");
+    sem_block_loader = initSemaphore(argv[0], 3);
+    if (sem_block_loader == -1) {
+        printf("[Error] Failed to initialize semaphore: %s\n", strerror(errno));
         cleanupSharedMemories();
-        cleanupSemaphore(sem_block_stealer, sem_block_stealer_fd, shm_sem_block_stealer_name);
+        sem_destroy(sem_block_stealer);
         return 1;
     }
 
-    sem_block_observer_fd = initSemaphore(shm_sem_block_observer_name, &sem_block_observer);
-    if (sem_block_stealer_fd == -1) {
-        printf("[Error] Failed to init semaphore for observer, exiting.\n");
+    sem_block_observer = initSemaphore(argv[0], 4);
+    if (sem_block_observer == -1) {
+        printf("[Error] Failed to initialize semaphore: %s\n", strerror(errno));
         cleanupSharedMemories();
-        cleanupSemaphore(sem_block_stealer, sem_block_stealer_fd, shm_sem_block_stealer_name);
-        cleanupSemaphore(sem_block_loader, sem_block_loader_fd, shm_sem_block_loader_name);
+        sem_destroy(sem_block_stealer);
+        sem_destroy(sem_block_loader);
         return 1;
     }
 
