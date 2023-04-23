@@ -358,7 +358,7 @@ int emulateObserver(char const* sem_block_observer_name)
 
         total_items_price += loaded_item_price;
 
-        printf("[Observer] A new item! + %d rubbles, total: %d rubbles for %d items stolen\n",
+        printf("[Observer] A new item! +%d rubbles, total: %d rubbles for %d items stolen\n",
             loaded_item_price, total_items_price, loaded_item_count + 1);
     }
 
